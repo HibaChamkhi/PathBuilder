@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -32,23 +35,27 @@ class PathBuilderWidget extends StatefulWidget {
 }
 
 class _PathBuilderWidgetState extends State<PathBuilderWidget> {
-  // Store points and control points for the path
+  final GlobalKey _globalKey = GlobalKey();
+
   List<Offset> points = [];
   List<Offset?> controlPointsIn = [];
   List<Offset?> controlPointsOut = [];
   List<bool> isControlPointModified = [];
   List<bool> isVisible = [];
 
-  // Track the currently selected point and control point
   int? selectedPointIndex;
   int? selectedControlPointIndex;
   bool isOutwardControl = true;
 
-  // Path to imported SVG file
   String? importedSvgPath;
 
-  // Offset to track movement of the entire path
   Offset offset = Offset.zero;
+  bool isExporting = false;
+  bool isDrawingFinished = false; // New state variable
+
+
+  List<Offset> savedControlPointsIn = [];
+  List<Offset> savedControlPointsOut = [];
 
   @override
   Widget build(BuildContext context) {
@@ -56,126 +63,185 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
       children: [
         GestureDetector(
           onTapDown: (TapDownDetails details) {
-            final tapPosition = details.localPosition;
-            _selectPointOrAddNew(tapPosition);
+            if (!isDrawingFinished) {
+              final tapPosition = details.localPosition;
+              _selectPointOrAddNew(tapPosition);
+            }
           },
           onPanUpdate: (DragUpdateDetails details) {
-            if (selectedPointIndex == null && selectedControlPointIndex == null) {
-              // Move the entire path if no point or control point is selected
-              _movePath(details.delta);
-            } else {
-              _updateSelectedPoint(details.delta);
+            if (!isDrawingFinished) {
+              if (selectedPointIndex == null && selectedControlPointIndex == null) {
+                _movePath(details.delta);
+              } else {
+                _updateSelectedPoint(details.delta);
+              }
             }
           },
           onPanEnd: (_) {
-            _clearSelection();
+            if (!isDrawingFinished) {
+              _clearSelection();
+            }
           },
           onDoubleTap: () {
-            _removeSelectedPoint();
+            if (!isDrawingFinished) {
+              _removeSelectedPoint();
+            }
           },
           child: MouseRegion(
             onHover: (PointerHoverEvent event) {
-              final hoverPosition = event.localPosition;
-              _toggleLineVisibility(hoverPosition, true);
+              if (!isDrawingFinished) {
+                final hoverPosition = event.localPosition;
+                _toggleLineVisibility(hoverPosition, true);
+              }
             },
             onExit: (PointerExitEvent event) {
-              _toggleLineVisibility(event.localPosition, false);
+              if (!isDrawingFinished) {
+                _toggleLineVisibility(event.localPosition, false);
+              }
             },
-            child: Stack(
-              children: [
-                // Display the imported SVG first
-                if (importedSvgPath != null)
-                  SvgPicture.file(
-                    File(importedSvgPath!),
-                    width: 800, // Set your desired width
-                    height: 600, // Set your desired height
+            child: RepaintBoundary(
+              key: _globalKey,
+              child: Stack(
+                children: [
+                  if (importedSvgPath != null)
+                    SvgPicture.file(
+                      File(importedSvgPath!),
+                      width: 800,
+                      height: 600,
+                    ),
+                  CustomPaint(
+                    painter: PathPainter(
+                      points.map((point) => point + offset).toList(),
+                      controlPointsIn.map((cp) => cp != null ? cp + offset : null).toList(),
+                      controlPointsOut.map((cp) => cp != null ? cp + offset : null).toList(),
+                      isControlPointModified,
+                      isVisible,
+                      showControlPoints: !isDrawingFinished, // Control points hidden when drawing is finished
+                      isExporting: false,
+                    ),
+                    child: const SizedBox.expand(),
                   ),
-                // Paint the path on top of the SVG
-                CustomPaint(
-                  painter: PathPainter(
-                    points.map((point) => point + offset).toList(),
-                    controlPointsIn.map((cp) => cp != null ? cp + offset : null).toList(),
-                    controlPointsOut.map((cp) => cp != null ? cp + offset : null).toList(),
-                    isControlPointModified,
-                    isVisible,
-                  ),
-                  child: const SizedBox.expand(),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-        // Floating Action Buttons for importing, exporting, and clearing paths
         _buildFloatingActionButton(Icons.file_upload, _importSvg, 16.0),
         _buildFloatingActionButton(Icons.save_alt, _exportPathAsSvg, 100.0),
         _buildFloatingActionButton(Icons.clear, _clearAll, 200.0),
+        // Toggle button that switches between "Finish" and "Edit" modes
+        _buildFloatingActionButton(
+          isDrawingFinished ? Icons.edit : Icons.check, // Icon changes based on mode
+          _toggleDrawingMode, // Call toggle function
+          300.0,
+        ),
       ],
     );
   }
 
-  /// Creates a FloatingActionButton and positions it on the screen.
   Positioned _buildFloatingActionButton(IconData icon, VoidCallback onPressed, double rightPosition) {
     return Positioned(
       bottom: 16.0,
       right: rightPosition,
       child: FloatingActionButton(
         onPressed: onPressed,
-        tooltip: icon == Icons.file_upload ? 'Import SVG' : icon == Icons.save_alt ? 'Export' : 'Clear',
+        tooltip: icon == Icons.file_upload
+            ? 'Import SVG'
+            : icon == Icons.save_alt
+            ? 'Export'
+            : icon == Icons.clear
+            ? 'Clear'
+            : 'Finish Drawing',
         child: Icon(icon),
       ),
     );
   }
 
-  /// Imports an SVG file and updates the state.
   Future<void> _importSvg() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['svg']);
     if (result != null && result.files.isNotEmpty) {
       setState(() {
-        importedSvgPath = result.files.first.path; // Store the selected SVG path
+        importedSvgPath = result.files.first.path;
+        print("importSvg $importedSvgPath");
       });
     }
   }
 
-  /// Exports the current path as an SVG file.
   Future<void> _exportPathAsSvg() async {
-    final svgPath = StringBuffer();
-    svgPath.write('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">\n');
+    // Call the _finishDrawing method first and await its completion
+    await _finishDrawing(); // Ensure that this completes all drawing clearing
 
-    if (points.isNotEmpty) {
-      svgPath.write('<path d="M${points.first.dx + offset.dx},${points.first.dy + offset.dy} ');
+    // Now proceed to export the image
+    setState(() {
+      // Set isExporting to true temporarily for the export
+      isExporting = true;
+    });
 
-      for (int i = 0; i < points.length - 1; i++) {
-        if (isControlPointModified[i] && isVisible[i]) {
-          Offset controlIn = (controlPointsIn[i] ?? points[i]) + offset;
-          Offset controlOut = (controlPointsOut[i] ?? points[i + 1]) + offset;
-          svgPath.write('C${controlOut.dx},${controlOut.dy} ${controlIn.dx},${controlIn.dy} ${points[i + 1].dx + offset.dx},${points[i + 1].dy + offset.dy} ');
-        } else if (isVisible[i]) {
-          svgPath.write('L${points[i + 1].dx + offset.dx},${points[i + 1].dy + offset.dy} ');
-        }
-      }
+    RenderRepaintBoundary boundary = _globalKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
 
-      svgPath.write('" stroke="black" fill="none" stroke-width="4"/>\n');
-    }
+    // Capture the image
+    ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+    ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
-    svgPath.write('</svg>');
+    Uint8List pngBytes = byteData!.buffer.asUint8List();
 
-    // Get the directory to save the SVG
     final directory = await getApplicationDocumentsDirectory();
-    final svgPathFile = '${directory.path}/exported_shape.svg';
+    final pngPathFile = '${directory.path}/exported_shape.png';
 
-    // Write the SVG to a file
-    final file = await File(svgPathFile).writeAsString(svgPath.toString());
+    // Write the image to a file
+    final file = await File(pngPathFile).writeAsBytes(pngBytes);
 
-    // Display a message and print the file path
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('SVG shape exported to ${file.path}')),
+      SnackBar(content: Text('Shape exported to ${file.path}')),
     );
 
-    // Print the path in the console
-    print('SVG file saved at: ${file.path}');
+    print('PNG file saved at: ${file.path}');
+
+    // Reset the export state
+    setState(() {
+      isExporting = false; // Reset exporting state
+    });
+  }
+  Future<void> _finishDrawing() async {
+    // This method clears the drawing state
+    setState(() {
+      print("Finishing drawing...");
+      // Save the current control points
+      savedControlPointsIn = List.from(controlPointsIn);
+      savedControlPointsOut = List.from(controlPointsOut);
+
+      // Clear the control points and any other necessary states
+      controlPointsIn.clear();
+      controlPointsOut.clear();
+      isDrawingFinished = true; // Update the drawing state
+    });
+
+    // Optionally, you can add a small delay if needed to ensure the UI updates before exporting
+    await Future.delayed(Duration(milliseconds: 100));
   }
 
-  /// Selects an existing point or adds a new one based on tap position.
+  void _restoreDrawing() {
+    // This method restores the saved control points
+    setState(() {
+      print("Restoring drawing...");
+      controlPointsIn = List.from(savedControlPointsIn);
+      controlPointsOut = List.from(savedControlPointsOut);
+      isDrawingFinished = false; // Reset the drawing state
+    });
+  }
+  void _toggleDrawingMode() {
+    setState(() {
+      if (!isDrawingFinished) {
+        // If we are switching from edit mode to drawing finished mode, call _finishDrawing()
+        _finishDrawing();
+      } else {
+        _restoreDrawing();
+        // Just toggle the mode back to edit mode
+        isDrawingFinished = false;
+      }
+    });
+  }
+
   void _selectPointOrAddNew(Offset position) {
     const double proximityThreshold = 10.0;
 
@@ -197,7 +263,6 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     _addNewPoint(position);
   }
 
-  /// Selects a point at a given index.
   void _selectPoint(int index) {
     setState(() {
       selectedPointIndex = index;
@@ -205,7 +270,6 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     });
   }
 
-  /// Selects a control point at a given index.
   void _selectControlPoint(int index, {required bool isOutward}) {
     setState(() {
       selectedPointIndex = null;
@@ -214,23 +278,20 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     });
   }
 
-  /// Adds a new point at the specified position.
   void _addNewPoint(Offset position) {
     setState(() {
       points.add(position);
       controlPointsIn.add(position - const Offset(30, 0));
       controlPointsOut.add(position + const Offset(30, 0));
       isControlPointModified.add(false);
-      isVisible.add(true); // New lines start as visible
+      isVisible.add(true);
     });
   }
 
-  /// Checks if a point is within a specified proximity to another position.
   bool _isWithinProximity(Offset? point, Offset position, double threshold) {
     return point != null && (point - position).distance < threshold;
   }
 
-  /// Updates the position of the selected point or control point based on the drag delta.
   void _updateSelectedPoint(Offset delta) {
     if (selectedPointIndex != null) {
       _movePointAndControlPoints(selectedPointIndex!, delta);
@@ -239,7 +300,6 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     }
   }
 
-  /// Moves a point and its control points by a given delta.
   void _movePointAndControlPoints(int index, Offset delta) {
     setState(() {
       points[index] += delta;
@@ -248,7 +308,6 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     });
   }
 
-  /// Moves a control point by a given delta.
   void _moveControlPoint(int index, Offset delta) {
     setState(() {
       if (isOutwardControl) {
@@ -260,14 +319,12 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     });
   }
 
-  /// Moves the entire path by a given delta.
   void _movePath(Offset delta) {
     setState(() {
       offset += delta;
     });
   }
 
-  /// Clears the selected point and control point.
   void _clearSelection() {
     setState(() {
       selectedPointIndex = null;
@@ -275,7 +332,6 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
     });
   }
 
-  /// Toggles the visibility of the lines when hovering over them.
   void _toggleLineVisibility(Offset position, bool visible) {
     const double proximityThreshold = 10.0;
 
@@ -284,11 +340,11 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
         setState(() {
           isVisible[i] = visible;
         });
+        return;
       }
     }
   }
 
-  /// Removes the selected point from the path.
   void _removeSelectedPoint() {
     if (selectedPointIndex != null) {
       setState(() {
@@ -297,12 +353,11 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
         controlPointsOut.removeAt(selectedPointIndex!);
         isControlPointModified.removeAt(selectedPointIndex!);
         isVisible.removeAt(selectedPointIndex!);
-        selectedPointIndex = null; // Clear selection
       });
+      _clearSelection();
     }
   }
 
-  /// Clears all points and paths.
   void _clearAll() {
     setState(() {
       points.clear();
@@ -310,13 +365,17 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
       controlPointsOut.clear();
       isControlPointModified.clear();
       isVisible.clear();
-      selectedPointIndex = null; // Clear selection
+      selectedPointIndex = null;
       selectedControlPointIndex = null;
-      offset = Offset.zero; // Reset the offset
+      offset = Offset.zero;
+      importedSvgPath = null;
     });
   }
-}
 
+
+
+
+}
 
 
 class PathPainter extends CustomPainter {
@@ -326,15 +385,28 @@ class PathPainter extends CustomPainter {
   final List<bool> isControlPointModified;
   final List<bool> isVisible;
   final bool showControlPoints;
+  final bool isExporting;
 
-  PathPainter(this.points, this.controlPointsIn, this.controlPointsOut, this.isControlPointModified, this.isVisible, {this.showControlPoints = true});
+  PathPainter(
+      this.points,
+      this.controlPointsIn,
+      this.controlPointsOut,
+      this.isControlPointModified,
+      this.isVisible, {
+        this.showControlPoints = true,
+        required this.isExporting, // Make sure this is required
+      });
 
   @override
   void paint(Canvas canvas, Size size) {
     _drawPath(canvas);
 
-    if (showControlPoints) {
+    // Draw control points and lines only if not exporting
+    if (!isExporting) {
+
+      // if (showControlPoints) {
       _drawControlPoints(canvas);
+      // }
       _drawPoints(canvas);
     }
   }
@@ -380,6 +452,7 @@ class PathPainter extends CustomPainter {
   }
 
   void _drawPoints(Canvas canvas) {
+    //  the blue points drawing code
     Paint pointPaint = Paint()
       ..color = Colors.blue
       ..style = PaintingStyle.fill;
@@ -390,8 +463,7 @@ class PathPainter extends CustomPainter {
 
     Paint controlPointPaint = Paint()
       ..color = Colors.green
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..style = PaintingStyle.fill;
 
     for (Offset? controlPoint in controlPointsIn) {
       if (controlPoint != null) {
@@ -406,9 +478,10 @@ class PathPainter extends CustomPainter {
     }
   }
 
-
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
     return true;
   }
 }
+
+
