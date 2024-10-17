@@ -40,6 +40,7 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
   List<Offset> points = [];
   List<Offset?> controlPointsIn = [];
   List<Offset?> controlPointsOut = [];
+
   List<bool> isControlPointModified = [];
   List<bool> isVisible = [];
 
@@ -84,12 +85,12 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
             }
           },
           // Detects when the user lifts their finger or releases the mouse
-          onPanEnd: (_) {
-            if (!isDrawingFinished) {
-              // Clears selection of points or control points after dragging ends
-              _clearSelection();
-            }
-          },
+          // onPanEnd: (_) {
+          //   if (!isDrawingFinished) {
+          //     // Clears selection of points or control points after dragging ends
+          //     _clearSelection();
+          //   }
+          // },
           // Detects when the user double-taps on the canvas
           onDoubleTap: () {
             if (!isDrawingFinished) {
@@ -100,32 +101,32 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
           // MouseRegion widget to handle mouse hovering
           child: MouseRegion(
             // Detects when the mouse hovers over the canvas
-            onHover: (PointerHoverEvent event) {
-              print("onhover");
-              if (!isDrawingFinished) {
-                final hoverPosition = event.localPosition;
-                // Toggles the visibility of control lines while hovering
-                _toggleLineVisibility(hoverPosition, true);
-              }
-            },
-            // Detects when the mouse leaves the canvas area
-            onExit: (PointerExitEvent event) {
-              if (!isDrawingFinished) {
-                // Hides control lines when the mouse leaves the canvas area
-                _toggleLineVisibility(event.localPosition, false);
-              }
-            },
+            // onHover: (PointerHoverEvent event) {
+            //   print("onhover");
+            //   if (!isDrawingFinished) {
+            //     final hoverPosition = event.localPosition;
+            //     // Toggles the visibility of control lines while hovering
+            //     // _toggleLineVisibility(hoverPosition, true);
+            //   }
+            // },
+            // // Detects when the mouse leaves the canvas area
+            // onExit: (PointerExitEvent event) {
+            //   if (!isDrawingFinished) {
+            //     // Hides control lines when the mouse leaves the canvas area
+            //     // _toggleLineVisibility(event.localPosition, false);
+            //   }
+            // },
             // RepaintBoundary widget helps with performance by limiting repainting
             child: RepaintBoundary(
-              key: _globalKey, // Used to capture the current state of the canvas for exporting
+              key: _globalKey,
               child: Stack(
                 children: [
                   // If an SVG path has been imported, display it as an image
                   if (importedSvgPath != null)
                     SvgPicture.file(
                       File(importedSvgPath!),
-                      width: 800, // Set the width of the SVG image
-                      height: 600, // Set the height of the SVG image
+                      width: 800,
+                      height: 600,
                     ),
                   // CustomPaint widget draws the path and control points
                   CustomPaint(
@@ -283,26 +284,26 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
 
 // Selects a point or control point within a certain proximity or adds a new point if none are selected
   void _selectPointOrAddNew(Offset position) {
-    const double proximityThreshold = 10.0; // Threshold distance for proximity selection
+    const double proximityThreshold = 5.0; // Threshold distance for proximity selection
 
     for (int i = 0; i < points.length; i++) {
-      // Check if a point is within proximity
+      // Check if a point is within proximity(moving the blue point)
       if (_isWithinProximity(points[i] + offset, position, proximityThreshold)) {
         _selectPoint(i);
         return;
       }
-      // Check if an outward control point is within proximity
+      // Check if an outward control point is within proximity(moving the green right point)
       if (_isWithinProximity(controlPointsOut[i] != null ? controlPointsOut[i]! + offset : null, position, proximityThreshold)) {
         _selectControlPoint(i, isOutward: true);
         return;
       }
-      // Check if an inward control point is within proximity
+      // Check if an inward control point is within proximity(moving the green left point)
       if (_isWithinProximity(controlPointsIn[i] != null ? controlPointsIn[i]! + offset : null, position, proximityThreshold)) {
         _selectControlPoint(i, isOutward: false);
         return;
       }
-    }
 
+    }
     _addNewPoint(position); // Add a new point if no proximity match is found
   }
 
@@ -377,26 +378,28 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
   }
 
 // Clears the current selection of points or control points
-  void _clearSelection() {
-    setState(() {
-      selectedPointIndex = null; // Deselect point
-      selectedControlPointIndex = null; // Deselect control point
-    });
-  }
+//   void _clearSelection() {
+//     setState(() {
+//       selectedPointIndex = null; // Deselect point
+//       selectedControlPointIndex = null; // Deselect control point
+//     });
+//   }
+
+
 
 // Toggles the visibility of a line based on proximity to a point
-  void _toggleLineVisibility(Offset position, bool visible) {
-    const double proximityThreshold = 10.0; // Threshold distance for proximity selection
-
-    for (int i = 0; i < points.length; i++) {
-      if (_isWithinProximity(points[i] + offset, position, proximityThreshold)) {
-        setState(() {
-          isVisible[i] = visible; // Set visibility of the point/line
-        });
-        return;
-      }
-    }
-  }
+//   void _toggleLineVisibility(Offset position, bool visible) {
+//     const double proximityThreshold = 10.0; // Threshold distance for proximity selection
+//
+//     for (int i = 0; i < points.length; i++) {
+//       if (_isWithinProximity(points[i] + offset, position, proximityThreshold)) {
+//         setState(() {
+//           isVisible[i] = visible; // Set visibility of the point/line
+//         });
+//         return;
+//       }
+//     }
+//   }
 
 // Removes the currently selected point along with its control points, and clears the selection
   void _removeSelectedPoint() {
@@ -408,7 +411,7 @@ class _PathBuilderWidgetState extends State<PathBuilderWidget> {
         isControlPointModified.removeAt(selectedPointIndex!); // Remove control modification flag
         isVisible.removeAt(selectedPointIndex!); // Remove visibility flag
       });
-      _clearSelection(); // Clear any selections after removal
+      // _clearSelection(); // Clear any selections after removal
     }
   }
 
@@ -469,7 +472,7 @@ class PathPainter extends CustomPainter {
     Paint pathPaint = Paint()
       ..color = Colors.black // Black color for the path
       ..style = PaintingStyle.stroke // Stroke style for outline
-      ..strokeWidth = 4.0; // Set line thickness
+      ..strokeWidth = 2.0; // Set line thickness
 
     if (points.isNotEmpty) {
       Path path = Path()..moveTo(points.first.dx, points.first.dy); // Move to the first point
